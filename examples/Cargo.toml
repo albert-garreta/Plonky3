@@ -35,6 +35,7 @@ postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit", features = ["test-utils"] }
@@ -47,3 +48,7 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "iter_f_air"
+harness = false
