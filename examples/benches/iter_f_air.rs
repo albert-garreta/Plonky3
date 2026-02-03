@@ -8,9 +8,11 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::FriParameters;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{StarkConfig, prove, verify};
+use p3_util::log2_strict_usize;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::hint::black_box;
@@ -37,9 +39,9 @@ fn make_two_adic_config(log_final_poly_len: usize) -> Config {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters {
-        log_blowup: 2,
+        log_blowup: 4,
         log_final_poly_len,
-        num_queries: 2,
+        num_queries: 50,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
@@ -59,7 +61,7 @@ fn sample_case() -> (IterFAir, RowMajorMatrix<Val>, Vec<Val>) {
 
 fn bench_iter_f_trace(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
-    c.bench_function("iter_f/trace_gen_2^10", |b| {
+    c.bench_function("iter_f/trace_gen_2^13", |b| {
         b.iter(|| {
             let x0: u32 = rng.random();
             let trace = generate_trace_rows::<Val>(x0);
@@ -72,9 +74,13 @@ fn bench_iter_f_prove_verify(c: &mut Criterion) {
     let (air, trace, pis) = sample_case();
     let config = make_two_adic_config(2);
 
+    eprintln!("iter_f/trace_height: {}", trace.height());
+    eprintln!("iter_f/log_n: {}", log2_strict_usize(trace.height()));
+    eprintln!("iter_f/trace_width: {}", trace.width());
+
     let proof = prove(&config, &air, trace.clone(), &pis);
     let proof_bytes = postcard::to_allocvec(&proof).expect("serialize proof");
-    println!("iter_f/proof_size_bytes: {}", proof_bytes.len());
+    eprintln!("iter_f/proof_size_bytes: {}", proof_bytes.len());
 
     c.bench_function("iter_f/prove", |b| {
         b.iter(|| {

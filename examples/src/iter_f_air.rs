@@ -12,7 +12,7 @@ const LIMB_BITS: usize = 16;
 const NUM_STEPS: usize = 1 << 13;
 const TRACE_WIDTH: usize = NUM_BITS * 4 + LIMB_BITS * 2 + 2;
 
-/// AIR for iterating `f(x) = (x^2 mod 2^32) XOR ROTR^3(x)` for `2^10` steps.
+/// AIR for iterating `f(x) = (x^2 mod 2^32) XOR ROTR^3(x)` for `2^13` steps.
 ///
 /// Public values (2):
 /// - `x0_low`: low 16 bits of the initial input `x_0`
@@ -126,10 +126,10 @@ impl<F> Borrow<IterFRow<F>> for [F] {
     }
 }
 
-/// Generate a trace for `2^10` steps, starting from `x0`.
+/// Generate a trace for `2^13` steps, starting from `x0`.
 ///
 /// Each row stores the input bits `x_i`, the square bits, the rotated bits,
-/// and the output bits `x_{i+1}` so the final row contains `x_{2^10}` in `out_bits`.
+/// and the output bits `x_{i+1}` so the final row contains `x_{2^13}` in `out_bits`.
 pub fn generate_trace_rows<F: PrimeField64>(x0: u32) -> RowMajorMatrix<F> {
     let n = NUM_STEPS;
     let mut trace = RowMajorMatrix::new(F::zero_vec(n * TRACE_WIDTH), TRACE_WIDTH);
