@@ -10,7 +10,8 @@ use p3_matrix::Matrix;
 const NUM_BITS: usize = 32;
 const LIMB_BITS: usize = 16;
 const NUM_STEPS: usize = 1 << 13;
-const TRACE_WIDTH: usize = NUM_BITS * 4 + LIMB_BITS * 2 + 2;
+const T1_HI_BITS: usize = 17; // 2*x0*x1 can be up to 2*(2^16-1)^2 ≈ 2^33, so t1_hi needs 17 bits
+const TRACE_WIDTH: usize = NUM_BITS * 4 + LIMB_BITS * 2 + T1_HI_BITS + 1;
 
 /// AIR for iterating `f(x) = (x^2 mod 2^32) XOR ROTR^3(x)` for `2^13` steps.
 ///
@@ -43,6 +44,7 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for IterFAir {
         builder.assert_bools(local.out_bits.clone());
         builder.assert_bools(local.x0_sq_hi_bits.clone());
         builder.assert_bools(local.t1_low_bits.clone());
+        builder.assert_bools(local.t1_hi_bits.clone());
         builder.assert_bool(local.s1_carry.clone());
 
         // Pack x, square, and helper limbs.
@@ -62,9 +64,10 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for IterFAir {
 
         // t1 = 2 * x0 * x1 = t1_low + 2^16 * t1_hi
         let t1 = x0.clone() * x1.clone() * AB::Expr::TWO;
+        let t1_hi: AB::Expr = pack_bits_le(local.t1_hi_bits.iter().cloned());
         builder.assert_eq(
             t1,
-            t1_low.clone() + two_pow_16.clone() * local.t1_hi.clone().into(),
+            t1_low.clone() + two_pow_16.clone() * t1_hi,
         );
 
         // s1 = (x0_sq_hi + t1_low) mod 2^16
@@ -111,8 +114,8 @@ struct IterFRow<F> {
     out_bits: [F; NUM_BITS],
     x0_sq_hi_bits: [F; LIMB_BITS],
     t1_low_bits: [F; LIMB_BITS],
+    t1_hi_bits: [F; T1_HI_BITS],
     s1_carry: F,
-    t1_hi: F,
 }
 
 impl<F> Borrow<IterFRow<F>> for [F] {
@@ -157,7 +160,7 @@ pub fn generate_trace_rows<F: PrimeField64>(x0: u32) -> RowMajorMatrix<F> {
 
         let t1 = 2 * x0_low * x1_high;
         let t1_low = (t1 & 0xffff) as u16;
-        let t1_hi = (t1 >> 16) as u64;
+        let t1_hi = (t1 >> 16) as u32;
 
         let s1_carry = ((x0_sq_hi as u64 + t1_low as u64) >> 16) & 1;
 
@@ -167,8 +170,8 @@ pub fn generate_trace_rows<F: PrimeField64>(x0: u32) -> RowMajorMatrix<F> {
         row.out_bits = out_bits;
         row.x0_sq_hi_bits = bits_le_16::<F>(x0_sq_hi);
         row.t1_low_bits = bits_le_16::<F>(t1_low);
+        row.t1_hi_bits = bits_le_17::<F>(t1_hi);
         row.s1_carry = F::from_u64(s1_carry);
-        row.t1_hi = F::from_u64(t1_hi);
 
         x = out;
     }
@@ -184,6 +187,12 @@ fn bits_le_32<R: PrimeCharacteristicRing>(val: u32) -> [R; NUM_BITS] {
 
 #[inline]
 fn bits_le_16<R: PrimeCharacteristicRing>(val: u16) -> [R; LIMB_BITS] {
+    let bits = u64_to_bits_le::<R>(val as u64);
+    array::from_fn(|i| bits[i].clone())
+}
+
+#[inline]
+fn bits_le_17<R: PrimeCharacteristicRing>(val: u32) -> [R; T1_HI_BITS] {
     let bits = u64_to_bits_le::<R>(val as u64);
     array::from_fn(|i| bits[i].clone())
 }
