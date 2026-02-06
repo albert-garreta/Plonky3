@@ -16,7 +16,14 @@ p3-util.workspace = true
 sha2 = { workspace = true, features = ["compress"] }
 
 [dev-dependencies]
+criterion.workspace = true
 hex-literal.workspace = true
+p3-field.workspace = true
+p3-mersenne-31 = { path = "../mersenne-31" }
+
+[[bench]]
+name = "bench_sha256"
+harness = false
 
 [features]
 default = []

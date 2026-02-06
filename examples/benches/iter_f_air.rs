@@ -4,7 +4,7 @@ use p3_bn254::Bn254;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
-use p3_examples::iter_f_air::{IterFAir, generate_trace_rows};
+use p3_examples::iter_f_air::{IterFAir, generate_trace_rows, generate_public_values};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
 use p3_fri::FriParameters;
@@ -54,49 +54,68 @@ fn make_two_adic_config(log_final_poly_len: usize) -> Config {
     Config::new(pcs, challenger)
 }
 
-fn sample_case() -> (IterFAir, RowMajorMatrix<Val>, Vec<Val>) {
+fn sample_case<const N: usize>(num_steps: usize) -> (IterFAir<N>, RowMajorMatrix<Val>, Vec<Val>) {
     let mut rng = SmallRng::seed_from_u64(1);
-    let x0: u32 = rng.random();
-    let trace = generate_trace_rows::<Val>(x0);
-    let pis = vec![Val::from_u64((x0 & 0xffff) as u64), Val::from_u64((x0 >> 16) as u64)];
-    (IterFAir, trace, pis)
+    let initial_values: [u32; N] = core::array::from_fn(|_| rng.random());
+    let trace = generate_trace_rows::<Val, N>(initial_values, num_steps);
+    let pis = generate_public_values::<Val, N>(initial_values);
+    (IterFAir::<N>, trace, pis)
 }
 
 fn bench_iter_f_trace(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
-    c.bench_function("iter_f/trace_gen_2^13", |b| {
-        b.iter(|| {
-            let x0: u32 = rng.random();
-            let trace = generate_trace_rows::<Val>(x0);
-            black_box(trace);
-        })
-    });
+    let mut group = c.benchmark_group("iter_f_trace");
+    for log_steps in G_STEP_LOGS {
+        let steps = 1usize << log_steps;
+        group.bench_with_input(BenchmarkId::from_parameter(format!("2^{log_steps}")), &steps, |b, &steps| {
+            b.iter(|| {
+                let x0: u32 = rng.random();
+                let trace = generate_trace_rows::<Val, 1>([x0], steps);
+                black_box(trace);
+            })
+        });
+    }
+    group.finish();
 }
 
 fn bench_iter_f_prove_verify(c: &mut Criterion) {
-    let (air, trace, pis) = sample_case();
-    let config = make_two_adic_config(2);
+    let mut prove_group = c.benchmark_group("iter_f_prove");
+    for log_steps in G_STEP_LOGS {
+        let steps = 1usize << log_steps;
+        let (air, trace, pis) = sample_case::<1>(steps);
+        let config = make_two_adic_config(2);
 
-    eprintln!("iter_f/trace_height: {}", trace.height());
-    eprintln!("iter_f/log_n: {}", log2_strict_usize(trace.height()));
-    eprintln!("iter_f/trace_width: {}", trace.width());
+        eprintln!("iter_f/2^{}/trace_height: {}", log_steps, trace.height());
+        eprintln!("iter_f/2^{}/log_n: {}", log_steps, log2_strict_usize(trace.height()));
+        eprintln!("iter_f/2^{}/trace_width: {}", log_steps, trace.width());
 
-    let proof = prove(&config, &air, trace.clone(), &pis);
-    let proof_bytes = postcard::to_allocvec(&proof).expect("serialize proof");
-    eprintln!("iter_f/proof_size_bytes: {}", proof_bytes.len());
+        let proof = prove(&config, &air, trace.clone(), &pis);
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize proof");
+        eprintln!("iter_f/2^{}/proof_size_bytes: {}", log_steps, proof_bytes.len());
 
-    c.bench_function("iter_f/prove", |b| {
-        b.iter(|| {
-            let proof = prove(&config, &air, trace.clone(), &pis);
-            black_box(proof);
-        })
-    });
+        prove_group.bench_with_input(BenchmarkId::from_parameter(format!("2^{log_steps}")), &steps, |b, _| {
+            b.iter(|| {
+                let proof = prove(&config, &air, trace.clone(), &pis);
+                black_box(proof);
+            })
+        });
+    }
+    prove_group.finish();
 
-    c.bench_function("iter_f/verify", |b| {
-        b.iter(|| {
-            verify(&config, &air, &proof, &pis).expect("verification failed");
-        })
-    });
+    let mut verify_group = c.benchmark_group("iter_f_verify");
+    for log_steps in G_STEP_LOGS {
+        let steps = 1usize << log_steps;
+        let (air, trace, pis) = sample_case::<1>(steps);
+        let config = make_two_adic_config(2);
+        let proof = prove(&config, &air, trace.clone(), &pis);
+
+        verify_group.bench_with_input(BenchmarkId::from_parameter(format!("2^{log_steps}")), &steps, |b, _| {
+            b.iter(|| {
+                verify(&config, &air, &proof, &pis).expect("verification failed");
+            })
+        });
+    }
+    verify_group.finish();
 }
 
 #[inline]
@@ -137,10 +156,56 @@ fn bench_iter_g_bn254(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_iter_f_parallel(c: &mut Criterion) {
+    let mut prove_group = c.benchmark_group("iter_f_parallel_prove");
+    
+    // 32 parallel instances, 2^8 iterations
+    const NUM_INSTANCES: usize = 32;
+    const LOG_STEPS: usize = 8;
+    let steps = 1usize << LOG_STEPS;
+    
+    let (air, trace, pis) = sample_case::<NUM_INSTANCES>(steps);
+    let config = make_two_adic_config(2);
+    
+    eprintln!("iter_f_parallel/instances: {}", NUM_INSTANCES);
+    eprintln!("iter_f_parallel/2^{}/trace_height: {}", LOG_STEPS, trace.height());
+    eprintln!("iter_f_parallel/2^{}/log_n: {}", LOG_STEPS, log2_strict_usize(trace.height()));
+    eprintln!("iter_f_parallel/2^{}/trace_width: {}", LOG_STEPS, trace.width());
+    
+    let proof = prove(&config, &air, trace.clone(), &pis);
+    let proof_bytes = postcard::to_allocvec(&proof).expect("serialize proof");
+    eprintln!("iter_f_parallel/2^{}/proof_size_bytes: {}", LOG_STEPS, proof_bytes.len());
+    
+    prove_group.bench_with_input(
+        BenchmarkId::from_parameter(format!("{}x_2^{}", NUM_INSTANCES, LOG_STEPS)),
+        &steps,
+        |b, _| {
+            b.iter(|| {
+                let proof = prove(&config, &air, trace.clone(), &pis);
+                black_box(proof);
+            })
+        },
+    );
+    prove_group.finish();
+    
+    let mut verify_group = c.benchmark_group("iter_f_parallel_verify");
+    verify_group.bench_with_input(
+        BenchmarkId::from_parameter(format!("{}x_2^{}", NUM_INSTANCES, LOG_STEPS)),
+        &steps,
+        |b, _| {
+            b.iter(|| {
+                verify(&config, &air, &proof, &pis).expect("verification failed");
+            })
+        },
+    );
+    verify_group.finish();
+}
+
 criterion_group!(
     benches,
     bench_iter_f_trace,
     bench_iter_f_prove_verify,
-    bench_iter_g_bn254
+    bench_iter_g_bn254,
+    bench_iter_f_parallel
 );
 criterion_main!(benches);
