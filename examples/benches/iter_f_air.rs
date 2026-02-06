@@ -1,11 +1,12 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_bn254::Bn254;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_examples::iter_f_air::{IterFAir, generate_trace_rows};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
 use p3_fri::FriParameters;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -29,6 +30,8 @@ type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type Pcs = p3_fri::TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+const G_STEP_LOGS: [usize; 5] = [13, 14, 15, 16, 17];
 
 fn make_two_adic_config(log_final_poly_len: usize) -> Config {
     let mut rng = SmallRng::seed_from_u64(1);
@@ -96,5 +99,48 @@ fn bench_iter_f_prove_verify(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_iter_f_trace, bench_iter_f_prove_verify);
+#[inline]
+fn f_u32(x: u32) -> u32 {
+    let sq = x.wrapping_mul(x);
+    let rot = x.rotate_right(3);
+    sq ^ rot
+}
+
+#[inline]
+fn low_u32_from_bn254(x: &Bn254) -> u32 {
+    let digits = x.as_canonical_biguint().to_u64_digits();
+    digits.first().copied().unwrap_or(0) as u32
+}
+
+#[inline]
+fn g_bn254(x: Bn254) -> Bn254 {
+    let fx = f_u32(low_u32_from_bn254(&x));
+    let fx_field = Bn254::from_u64(fx as u64);
+    fx_field.square()
+}
+
+fn bench_iter_g_bn254(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(2);
+    let mut group = c.benchmark_group("iter_g_bn254");
+    for log_steps in G_STEP_LOGS {
+        let steps = 1usize << log_steps;
+        group.bench_with_input(BenchmarkId::from_parameter(format!("2^{log_steps}")), &steps, |b, &steps| {
+            b.iter(|| {
+                let mut x = Bn254::from_u64(rng.random::<u32>() as u64);
+                for _ in 0..steps {
+                    x = g_bn254(x);
+                }
+                let _ = black_box(x);
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_iter_f_trace,
+    bench_iter_f_prove_verify,
+    bench_iter_g_bn254
+);
 criterion_main!(benches);

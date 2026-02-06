@@ -36,6 +36,7 @@ rand.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+p3-bn254 = { path = "../bn254" }
 p3-baby-bear = { path = "../baby-bear" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit", features = ["test-utils"] }
